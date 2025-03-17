@@ -1,9 +1,10 @@
 // app/components/ImageUploadForm.tsx
 "use client";
 
-import React, { useState, FormEvent, ChangeEvent } from "react";
 import { UploadIcon, UserIcon, XIcon } from "lucide-react";
+import React, { ChangeEvent, FormEvent, useState } from "react";
 import { z } from "zod";
+import { uploadImagesToS3 } from "./actions";
 
 const MAX_FILE_SIZE = 300 * 1024; // 300KB in bytes
 const MAX_IMAGES = 5;
@@ -34,30 +35,43 @@ export default function ImageUploadForm() {
     const [previews, setPreviews] = useState<Preview[]>([]);
     const [dragActive, setDragActive] = useState(false);
     const [errors, setErrors] = useState<string[]>([]);
+    const [isUploading, setIsUploading] = useState(false);
+    const [uploadedUrls, setUploadedUrls] = useState<string[]>([]);
 
     // Handle form submission
     const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
         e.preventDefault();
+
         if (!formData.username || formData.images.length === 0) {
-            alert("Please fill all fields");
+            setErrors(["Please provide a username and at least one image"]);
             return;
         }
 
-        const submitData = new FormData();
-        submitData.append("username", formData.username);
-        formData.images.forEach((image) => submitData.append("images", image));
+        setIsUploading(true);
+        setErrors([]);
 
         try {
-            const response = await fetch("/api/upload", {
-                method: "POST",
-                body: submitData,
-            });
-            if (response.ok) {
-                alert("Upload successful!");
-            }
+            const data = new FormData();
+            data.append("username", formData.username);
+            formData.images.forEach((image) => data.append("images", image));
+
+            const fileNames = await uploadImagesToS3(data);
+
+            console.log("fileNames", fileNames);
+
+            // setUploadedUrls(imageUrls);
+            alert("Upload successful!");
+
+            // Clear form after successful upload
+            setFormData({ username: "", images: [] });
+            setPreviews([]);
         } catch (error) {
             console.error("Upload failed:", error);
-            alert("Upload failed!");
+            setErrors([
+                error instanceof Error ? error.message : "Upload failed!",
+            ]);
+        } finally {
+            setIsUploading(false);
         }
     };
 
@@ -223,10 +237,12 @@ export default function ImageUploadForm() {
 
                 {/* Error Messages */}
                 {errors.length > 0 && (
-                    <div className="mb-4 text-sm text-red-500">
-                        {errors.map((error, index) => (
-                            <p key={index}>{error}</p>
-                        ))}
+                    <div className="mt-4 rounded-lg bg-red-50 p-4 text-sm text-red-800">
+                        <ul className="list-disc pl-5">
+                            {errors.map((error, index) => (
+                                <li key={index}>{error}</li>
+                            ))}
+                        </ul>
                     </div>
                 )}
 
@@ -235,14 +251,92 @@ export default function ImageUploadForm() {
                     {formData.images.length}/{MAX_IMAGES} images selected
                 </p>
 
-                {/* Submit Button */}
-                <button
-                    type="submit"
-                    className="w-full rounded-lg bg-indigo-600 px-4 py-3 font-medium text-white transition-colors hover:bg-indigo-700 disabled:bg-gray-400"
-                    disabled={formData.images.length === 0}
-                >
-                    Submit
-                </button>
+                <div className="mt-6">
+                    <button
+                        type="submit"
+                        disabled={isUploading || formData.images.length === 0}
+                        className={`flex w-full items-center justify-center rounded-lg bg-indigo-600 px-4 py-2 text-white transition-colors hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 ${
+                            isUploading || formData.images.length === 0
+                                ? "cursor-not-allowed opacity-50"
+                                : ""
+                        }`}
+                    >
+                        {isUploading ? (
+                            <>
+                                <svg
+                                    className="mr-2 h-5 w-5 animate-spin"
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    fill="none"
+                                    viewBox="0 0 24 24"
+                                >
+                                    <circle
+                                        className="opacity-25"
+                                        cx="12"
+                                        cy="12"
+                                        r="10"
+                                        stroke="currentColor"
+                                        strokeWidth="4"
+                                    ></circle>
+                                    <path
+                                        className="opacity-75"
+                                        fill="currentColor"
+                                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                                    ></path>
+                                </svg>
+                                Uploading...
+                            </>
+                        ) : (
+                            <>
+                                <UploadIcon className="mr-2 h-5 w-5" />
+                                Upload Images
+                            </>
+                        )}
+                    </button>
+                </div>
+
+                {/* Uploaded images */}
+                {uploadedUrls.length > 0 && (
+                    <div className="mt-6">
+                        <h3 className="mb-2 text-lg font-medium text-gray-900">
+                            Uploaded Images
+                        </h3>
+                        <div className="grid grid-cols-2 gap-2">
+                            {uploadedUrls.map((url, index) => (
+                                <div
+                                    key={index}
+                                    className="relative overflow-hidden rounded-lg"
+                                >
+                                    <img
+                                        src={url}
+                                        alt={`Uploaded ${index + 1}`}
+                                        className="h-40 w-full object-cover"
+                                    />
+                                    <a
+                                        href={url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="absolute bottom-2 right-2 rounded-full bg-white p-2 shadow-md transition-transform hover:scale-110"
+                                    >
+                                        <svg
+                                            xmlns="http://www.w3.org/2000/svg"
+                                            className="h-4 w-4 text-gray-700"
+                                            fill="none"
+                                            viewBox="0 0 24 24"
+                                            stroke="currentColor"
+                                        >
+                                            <path
+                                                strokeLinecap="round"
+                                                strokeLinejoin="round"
+                                                strokeWidth={2}
+                                                d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+                                            />
+                                        </svg>
+                                    </a>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
             </form>
         </div>
     );
